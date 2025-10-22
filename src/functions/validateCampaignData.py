@@ -49,31 +49,6 @@ def validate_campaign_data(campaign_data: dict) -> dict:
             "campaign_id": str or None,  # Campaign ID if present
             "validated_at": str  # ISO timestamp of validation
         }
-    
-    Examples:
-        >>> result = validate_campaign_data({
-        ...     "campaign_id": "camp_123",
-        ...     "source": "google_ads",
-        ...     "date": "2024-10-15",
-        ...     "spend": 1000.0,
-        ...     "impressions": 50000,
-        ...     "clicks": 1000
-        ... })
-        >>> result["valid"]
-        True
-        
-        >>> result = validate_campaign_data({
-        ...     "campaign_id": "camp_456",
-        ...     "source": "facebook_ads",
-        ...     "date": "2024-10-15",
-        ...     "spend": 500.0,
-        ...     "impressions": 0,
-        ...     "clicks": 100
-        ... })
-        >>> result["valid"]
-        False
-        >>> "clicks cannot exceed impressions" in result["errors"][0].lower()
-        True
     """
     # Initialize result structure
     errors = []
@@ -81,34 +56,19 @@ def validate_campaign_data(campaign_data: dict) -> dict:
     campaign_id = campaign_data.get("campaign_id")
 
     # Validate required fields
-    # Required: campaign_id, source, date, spend, impressions, clicks
     required_field_errors = validate_required_fields(campaign_data)
     errors.extend(required_field_errors)
 
     # Validate data types
-    # spend, revenue should be float
-    # impressions, clicks, conversions should be int
-    # date should be valid YYYY-MM-DD format
     data_type_errors = validate_data_types(campaign_data)
     errors.extend(data_type_errors)
 
     # Validate business rules
-    # spend >= 0
-    # clicks <= impressions
-    # conversions <= clicks (if conversions present)
-    # revenue >= 0 (if revenue present)
-    # date not in future
-    # date not more than 90 days old (warning)
     business_errors, business_warnings = validate_business_rules(campaign_data)
     errors.extend(business_errors)
     warnings.extend(business_warnings)
 
     # Detect anomalies
-    # impressions > 0 but clicks == 0 (warning - unusual but possible)
-    # impressions == 0 but clicks > 0 (error - impossible)
-    # spend > $100,000 (warning - unusual)
-    # CTR > 50% (error - likely data quality issue)
-    # conversions > 0 but revenue == 0 or missing (warning)
     anomaly_errors, anomaly_warnings = detect_anomalies(campaign_data)
     errors.extend(anomaly_errors)
     warnings.extend(anomaly_warnings)
@@ -144,7 +104,6 @@ def validate_required_fields(campaign_data: dict) -> List[str]:
     errors = []
     required_fields = ["campaign_id", "source", "date", "spend", "impressions", "clicks"]
 
-    # Check for missing fields
     for field in required_fields:
         if field not in campaign_data:
             errors.append(f"Missing required field: '{field}'")
@@ -163,8 +122,6 @@ def validate_data_types(campaign_data: dict) -> List[str]:
         List of error messages for incorrect data types
     """
     errors = []
-
-    # Validate types for each field
 
     # Check spend (should be float or int)
     if "spend" in campaign_data:
@@ -237,8 +194,6 @@ def validate_business_rules(campaign_data: dict) -> tuple[List[str], List[str]]:
     errors = []
     warnings = []
 
-    # Validate business constraints
-
     # Check spend >= 0
     if "spend" in campaign_data and isinstance(campaign_data["spend"], (float, int)):
         if campaign_data["spend"] < 0:
@@ -291,8 +246,6 @@ def detect_anomalies(campaign_data: dict) -> tuple[List[str], List[str]]:
     """
     errors = []
     warnings = []
-
-    # Check for suspicious patterns
 
     # impressions > 0 but clicks == 0 (warning - unusual but possible)
     if ("impressions" in campaign_data and "clicks" in campaign_data and

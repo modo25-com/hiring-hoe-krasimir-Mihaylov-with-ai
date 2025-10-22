@@ -111,6 +111,40 @@ def validate_required_fields(campaign_data: dict) -> List[str]:
     return errors
 
 
+def _check_type(data: dict, field: str, expected_type: type | tuple, type_name: str) -> Optional[str]:
+    """Helper: validate single field type."""
+    if field not in data:
+        return None
+
+    value = data[field]
+
+    # Exclude bools when checking for int (Python quirk: isinstance(True, int) == True)
+    if expected_type == int and isinstance(value, bool):
+        return f"Field '{field}' must be {type_name}, got {type(value).__name__}"
+
+    if not isinstance(value, expected_type):
+        return f"Field '{field}' must be {type_name}, got {type(value).__name__}"
+
+    return None
+
+
+def _check_date_format(data: dict, field: str) -> Optional[str]:
+    """Helper: validate date string format."""
+    if field not in data:
+        return None
+
+    value = data[field]
+
+    if not isinstance(value, str):
+        return f"Field '{field}' must be a string, got {type(value).__name__}"
+
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return None
+    except ValueError:
+        return f"Field '{field}' must be in YYYY-MM-DD format, got '{value}'"
+
+
 def validate_data_types(campaign_data: dict) -> List[str]:
     """
     Validate that field data types are correct.
@@ -121,64 +155,68 @@ def validate_data_types(campaign_data: dict) -> List[str]:
     Returns:
         List of error messages for incorrect data types
     """
-    errors = []
+    checks = [
+        _check_type(campaign_data, "spend", (float, int), "a number (float or int)"),
+        _check_type(campaign_data, "revenue", (float, int), "a number (float or int)"),
+        _check_type(campaign_data, "impressions", int, "an integer"),
+        _check_type(campaign_data, "clicks", int, "an integer"),
+        _check_type(campaign_data, "conversions", int, "an integer"),
+        _check_date_format(campaign_data, "date"),
+        _check_type(campaign_data, "campaign_id", str, "a string"),
+        _check_type(campaign_data, "source", str, "a string"),
+        _check_type(campaign_data, "campaign_name", str, "a string"),
+        _check_type(campaign_data, "currency", str, "a string"),
+    ]
 
-    # Check spend (should be float or int)
-    if "spend" in campaign_data:
-        if not isinstance(campaign_data["spend"], (float, int)):
-            errors.append(f"Field 'spend' must be a number (float or int), got {type(campaign_data['spend']).__name__}")
+    return [error for error in checks if error is not None]
 
-    # Check revenue (should be float or int)
-    if "revenue" in campaign_data:
-        if not isinstance(campaign_data["revenue"], (float, int)):
-            errors.append(f"Field 'revenue' must be a number (float or int), got {type(campaign_data['revenue']).__name__}")
 
-    # Check impressions (should be int)
-    if "impressions" in campaign_data:
-        if not isinstance(campaign_data["impressions"], int) or isinstance(campaign_data["impressions"], bool):
-            errors.append(f"Field 'impressions' must be an integer, got {type(campaign_data['impressions']).__name__}")
+def _check_non_negative(data: dict, field: str) -> Optional[str]:
+    """Helper: validate field >= 0."""
+    if field not in data:
+        return None
 
-    # Check clicks (should be int)
-    if "clicks" in campaign_data:
-        if not isinstance(campaign_data["clicks"], int) or isinstance(campaign_data["clicks"], bool):
-            errors.append(f"Field 'clicks' must be an integer, got {type(campaign_data['clicks']).__name__}")
+    value = data[field]
+    if isinstance(value, (float, int)) and value < 0:
+        return f"Field '{field}' cannot be negative, got {value}"
 
-    # Check conversions (should be int)
-    if "conversions" in campaign_data:
-        if not isinstance(campaign_data["conversions"], int) or isinstance(campaign_data["conversions"], bool):
-            errors.append(f"Field 'conversions' must be an integer, got {type(campaign_data['conversions']).__name__}")
+    return None
 
-    # Check date format (should be string in YYYY-MM-DD format)
-    if "date" in campaign_data:
-        if not isinstance(campaign_data["date"], str):
-            errors.append(f"Field 'date' must be a string, got {type(campaign_data['date']).__name__}")
-        else:
-            try:
-                datetime.strptime(campaign_data["date"], "%Y-%m-%d")
-            except ValueError:
-                errors.append(f"Field 'date' must be in YYYY-MM-DD format, got '{campaign_data['date']}'")
 
-    # Check campaign_id (should be string)
-    if "campaign_id" in campaign_data:
-        if not isinstance(campaign_data["campaign_id"], str):
-            errors.append(f"Field 'campaign_id' must be a string, got {type(campaign_data['campaign_id']).__name__}")
+def _check_not_exceeds(data: dict, field: str, limit_field: str) -> Optional[str]:
+    """Helper: validate field <= limit_field."""
+    if field not in data or limit_field not in data:
+        return None
 
-    # Check source (should be string)
-    if "source" in campaign_data:
-        if not isinstance(campaign_data["source"], str):
-            errors.append(f"Field 'source' must be a string, got {type(campaign_data['source']).__name__}")
+    value = data[field]
+    limit = data[limit_field]
 
-    # Check campaign_name (should be string if present)
-    if "campaign_name" in campaign_data:
-        if not isinstance(campaign_data["campaign_name"], str):
-            errors.append(f"Field 'campaign_name' must be a string, got {type(campaign_data['campaign_name']).__name__}")
+    if isinstance(value, int) and isinstance(limit, int) and value > limit:
+        return f"Field '{field}' ({value}) cannot exceed '{limit_field}' ({limit})"
 
-    # Check currency (should be string if present)
-    if "currency" in campaign_data:
-        if not isinstance(campaign_data["currency"], str):
-            errors.append(f"Field 'currency' must be a string, got {type(campaign_data['currency']).__name__}")
+    return None
 
-    return errors
+
+def _check_date_rules(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """Helper: validate date not in future (error) and not too old (warning)."""
+    if "date" not in data or not isinstance(data["date"], str):
+        return None, None
+
+    try:
+        campaign_date = datetime.strptime(data["date"], "%Y-%m-%d")
+        error = None
+        warning = None
+
+        if campaign_date.date() > datetime.now().date():
+            error = f"Field 'date' cannot be in the future, got '{data['date']}'"
+
+        days_old = (datetime.now() - campaign_date).days
+        if days_old > 90:
+            warning = f"Field 'date' is {days_old} days old (more than 90 days)"
+
+        return error, warning
+    except ValueError:
+        return None, None  # Date format error already caught in validate_data_types
 
 
 def validate_business_rules(campaign_data: dict) -> tuple[List[str], List[str]]:
@@ -191,47 +229,85 @@ def validate_business_rules(campaign_data: dict) -> tuple[List[str], List[str]]:
     Returns:
         Tuple of (errors, warnings)
     """
-    errors = []
-    warnings = []
+    date_error, date_warning = _check_date_rules(campaign_data)
 
-    # Check spend >= 0
-    if "spend" in campaign_data and isinstance(campaign_data["spend"], (float, int)):
-        if campaign_data["spend"] < 0:
-            errors.append(f"Field 'spend' cannot be negative, got {campaign_data['spend']}")
+    error_checks = [
+        _check_non_negative(campaign_data, "spend"),
+        _check_non_negative(campaign_data, "revenue"),
+        _check_not_exceeds(campaign_data, "clicks", "impressions"),
+        _check_not_exceeds(campaign_data, "conversions", "clicks"),
+        date_error,
+    ]
 
-    # Check revenue >= 0
-    if "revenue" in campaign_data and isinstance(campaign_data["revenue"], (float, int)):
-        if campaign_data["revenue"] < 0:
-            errors.append(f"Field 'revenue' cannot be negative, got {campaign_data['revenue']}")
+    warning_checks = [
+        date_warning,
+    ]
 
-    # Check clicks <= impressions
-    if ("clicks" in campaign_data and "impressions" in campaign_data and
-        isinstance(campaign_data["clicks"], int) and isinstance(campaign_data["impressions"], int)):
-        if campaign_data["clicks"] > campaign_data["impressions"]:
-            errors.append(f"Field 'clicks' ({campaign_data['clicks']}) cannot exceed 'impressions' ({campaign_data['impressions']})")
-
-    # Check conversions <= clicks (if conversions present)
-    if ("conversions" in campaign_data and "clicks" in campaign_data and
-        isinstance(campaign_data["conversions"], int) and isinstance(campaign_data["clicks"], int)):
-        if campaign_data["conversions"] > campaign_data["clicks"]:
-            errors.append(f"Field 'conversions' ({campaign_data['conversions']}) cannot exceed 'clicks' ({campaign_data['clicks']})")
-
-    # Check date not in future
-    if "date" in campaign_data and isinstance(campaign_data["date"], str):
-        try:
-            campaign_date = datetime.strptime(campaign_data["date"], "%Y-%m-%d")
-            if campaign_date.date() > datetime.now().date():
-                errors.append(f"Field 'date' cannot be in the future, got '{campaign_data['date']}'")
-
-            # Check date not more than 90 days old (warning)
-            days_old = (datetime.now() - campaign_date).days
-            if days_old > 90:
-                warnings.append(f"Field 'date' is {days_old} days old (more than 90 days)")
-        except ValueError:
-            # Date format error already caught in validate_data_types
-            pass
+    errors = [e for e in error_checks if e is not None]
+    warnings = [w for w in warning_checks if w is not None]
 
     return errors, warnings
+
+
+def _check_impressions_clicks_anomaly(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """Helper: detect impossible or unusual impressions/clicks combinations."""
+    if ("impressions" not in data or "clicks" not in data or
+        not isinstance(data["impressions"], int) or not isinstance(data["clicks"], int)):
+        return None, None
+
+    impressions = data["impressions"]
+    clicks = data["clicks"]
+    error = None
+    warning = None
+
+    if impressions == 0 and clicks > 0:
+        error = f"Impossible: 'impressions' is 0 but 'clicks' is {clicks}"
+    elif impressions > 0 and clicks == 0:
+        warning = f"Unusual: 'impressions' is {impressions} but 'clicks' is 0"
+
+    return error, warning
+
+
+def _check_high_spend(data: dict, threshold: float = 100000) -> Optional[str]:
+    """Helper: warn if spend exceeds threshold."""
+    if "spend" not in data or not isinstance(data["spend"], (float, int)):
+        return None
+
+    if data["spend"] > threshold:
+        return f"Unusually high spend: ${data['spend']:,.2f} (exceeds ${threshold:,.0f})"
+
+    return None
+
+
+def _check_high_ctr(data: dict, threshold: float = 50) -> Optional[str]:
+    """Helper: error if CTR exceeds threshold."""
+    if ("clicks" not in data or "impressions" not in data or
+        not isinstance(data["clicks"], int) or not isinstance(data["impressions"], int)):
+        return None
+
+    impressions = data["impressions"]
+    clicks = data["clicks"]
+
+    if impressions > 0:
+        ctr = (clicks / impressions) * 100
+        if ctr > threshold:
+            return f"Impossibly high CTR: {ctr:.1f}% (clicks={clicks}, impressions={impressions})"
+
+    return None
+
+
+def _check_conversions_without_revenue(data: dict) -> Optional[str]:
+    """Helper: warn if conversions exist but revenue is missing or zero."""
+    if "conversions" not in data or not isinstance(data["conversions"], int):
+        return None
+
+    if data["conversions"] > 0:
+        if "revenue" not in data:
+            return f"'conversions' is {data['conversions']} but 'revenue' is missing"
+        elif isinstance(data["revenue"], (float, int)) and data["revenue"] == 0:
+            return f"'conversions' is {data['conversions']} but 'revenue' is 0"
+
+    return None
 
 
 def detect_anomalies(campaign_data: dict) -> tuple[List[str], List[str]]:
@@ -244,41 +320,21 @@ def detect_anomalies(campaign_data: dict) -> tuple[List[str], List[str]]:
     Returns:
         Tuple of (errors, warnings)
     """
-    errors = []
-    warnings = []
+    impressions_clicks_error, impressions_clicks_warning = _check_impressions_clicks_anomaly(campaign_data)
 
-    # impressions > 0 but clicks == 0 (warning - unusual but possible)
-    if ("impressions" in campaign_data and "clicks" in campaign_data and
-        isinstance(campaign_data["impressions"], int) and isinstance(campaign_data["clicks"], int)):
-        if campaign_data["impressions"] > 0 and campaign_data["clicks"] == 0:
-            warnings.append(f"Unusual: 'impressions' is {campaign_data['impressions']} but 'clicks' is 0")
+    error_checks = [
+        impressions_clicks_error,
+        _check_high_ctr(campaign_data),
+    ]
 
-    # impressions == 0 but clicks > 0 (error - impossible)
-    if ("impressions" in campaign_data and "clicks" in campaign_data and
-        isinstance(campaign_data["impressions"], int) and isinstance(campaign_data["clicks"], int)):
-        if campaign_data["impressions"] == 0 and campaign_data["clicks"] > 0:
-            errors.append(f"Impossible: 'impressions' is 0 but 'clicks' is {campaign_data['clicks']}")
+    warning_checks = [
+        impressions_clicks_warning,
+        _check_high_spend(campaign_data),
+        _check_conversions_without_revenue(campaign_data),
+    ]
 
-    # spend > $100,000 (warning - unusual)
-    if "spend" in campaign_data and isinstance(campaign_data["spend"], (float, int)):
-        if campaign_data["spend"] > 100000:
-            warnings.append(f"Unusually high spend: ${campaign_data['spend']:,.2f} (exceeds $100,000)")
-
-    # CTR > 50% (error - likely data quality issue)
-    if ("clicks" in campaign_data and "impressions" in campaign_data and
-        isinstance(campaign_data["clicks"], int) and isinstance(campaign_data["impressions"], int)):
-        if campaign_data["impressions"] > 0:
-            ctr = (campaign_data["clicks"] / campaign_data["impressions"]) * 100
-            if ctr > 50:
-                errors.append(f"Impossibly high CTR: {ctr:.1f}% (clicks={campaign_data['clicks']}, impressions={campaign_data['impressions']})")
-
-    # conversions > 0 but revenue == 0 or missing (warning)
-    if "conversions" in campaign_data and isinstance(campaign_data["conversions"], int):
-        if campaign_data["conversions"] > 0:
-            if "revenue" not in campaign_data:
-                warnings.append(f"'conversions' is {campaign_data['conversions']} but 'revenue' is missing")
-            elif isinstance(campaign_data["revenue"], (float, int)) and campaign_data["revenue"] == 0:
-                warnings.append(f"'conversions' is {campaign_data['conversions']} but 'revenue' is 0")
+    errors = [e for e in error_checks if e is not None]
+    warnings = [w for w in warning_checks if w is not None]
 
     return errors, warnings
 
